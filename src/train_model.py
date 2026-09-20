@@ -4,167 +4,89 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
     classification_report,
     confusion_matrix
 )
+from sklearn.preprocessing import StandardScaler
+from data_loader import load_and_split_data, get_feature_columns
 
+def train_and_evaluate_rf():
+    print("Loading data...")
+    X_train, X_test, y_train, y_test = load_and_split_data()
+    feature_columns = get_feature_columns()
 
-# ============================================================
-# 1. LOAD FEATURE DATASET
-# ============================================================
+    print("Scaling features...")
+    # Using the same scaling logic for fairness in model comparison
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-DATA_PATH = "data/processed/cwru_features.csv"
-
-df = pd.read_csv(DATA_PATH)
-
-print("Dataset shape:", df.shape)
-
-
-# ============================================================
-# 2. TRAIN / TEST FILE SPLIT
-# ============================================================
-# IMPORTANT:
-# We split by FILE, not by individual windows.
-# This prevents windows from the same vibration recording
-# appearing in both training and testing data.
-
-train_files = [
-    97, 98, 100,
-    105, 106, 108,
-    118, 119, 121,
-    130, 131, 133
-]
-
-test_files = [
-    99,
-    107,
-    120,
-    132
-]
-
-
-train_df = df[df["file_id"].isin(train_files)].copy()
-test_df = df[df["file_id"].isin(test_files)].copy()
-
-
-print("\nTraining shape:", train_df.shape)
-print("Testing shape:", test_df.shape)
-
-
-# ============================================================
-# 3. SELECT FEATURES
-# ============================================================
-
-feature_columns = [
-    "rms",
-    "mean",
-    "std",
-    "peak",
-    "peak_to_peak",
-    "skewness",
-    "kurtosis",
-    "crest_factor",
-    "dominant_frequency_hz",
-    "spectral_centroid_hz",
-    "spectral_bandwidth_hz",
-    "spectral_energy"
-]
-
-
-X_train = train_df[feature_columns]
-y_train = train_df["label"]
-
-X_test = test_df[feature_columns]
-y_test = test_df["label"]
-
-
-print("\nNumber of features:", len(feature_columns))
-
-print("\nFeatures:")
-for feature in feature_columns:
-    print("-", feature)
-
-
-# ============================================================
-# 4. TRAIN RANDOM FOREST
-# ============================================================
-
-model = RandomForestClassifier(
-    n_estimators=200,
-    random_state=42
-)
-
-model.fit(X_train, y_train)
-
-
-# ============================================================
-# 5. PREDICTIONS
-# ============================================================
-
-y_pred = model.predict(X_test)
-
-
-# ============================================================
-# 6. EVALUATION
-# ============================================================
-
-accuracy = accuracy_score(y_test, y_pred)
-
-print("\n========================================")
-print("IMPROVED RANDOM FOREST RESULTS")
-print("========================================")
-
-print("\nAccuracy:", accuracy)
-
-print("\nClassification Report:")
-print(
-    classification_report(
-        y_test,
-        y_pred
+    # ============================================================
+    # TRAIN RANDOM FOREST
+    # ============================================================
+    print("Training Random Forest...")
+    model = RandomForestClassifier(
+        n_estimators=200,
+        random_state=42
     )
-)
+    model.fit(X_train_scaled, y_train)
 
+    # ============================================================
+    # PREDICTIONS & EVALUATION
+    # ============================================================
+    y_pred = model.predict(X_test_scaled)
 
-# ============================================================
-# 7. CONFUSION MATRIX
-# ============================================================
+    accuracy = accuracy_score(y_test, y_pred)
+    precision = precision_score(y_test, y_pred, average='macro')
+    recall = recall_score(y_test, y_pred, average='macro')
+    f1 = f1_score(y_test, y_pred, average='macro')
 
-cm = confusion_matrix(
-    y_test,
-    y_pred,
-    labels=[
-        "normal",
-        "inner_race",
-        "ball",
-        "outer_race"
-    ]
-)
+    print("\n========================================")
+    print("RANDOM FOREST RESULTS")
+    print("========================================")
+    print(f"Accuracy:  {accuracy:.4f}")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall:    {recall:.4f}")
+    print(f"F1-score:  {f1:.4f}")
 
-print("\nConfusion Matrix:")
-print(cm)
+    print("\nClassification Report:")
+    print(classification_report(y_test, y_pred))
 
+    # ============================================================
+    # CONFUSION MATRIX
+    # ============================================================
+    cm = confusion_matrix(
+        y_test,
+        y_pred,
+        labels=["normal", "inner_race", "ball", "outer_race"]
+    )
+    print("\nConfusion Matrix:")
+    print(cm)
 
-# ============================================================
-# 8. FEATURE IMPORTANCE
-# ============================================================
+    # ============================================================
+    # FEATURE IMPORTANCE
+    # ============================================================
+    importance = pd.DataFrame({
+        "feature": feature_columns,
+        "importance": model.feature_importances_
+    }).sort_values(by="importance", ascending=False)
 
-importance = pd.DataFrame({
-    "feature": feature_columns,
-    "importance": model.feature_importances_
-})
+    print("\n========================================")
+    print("FEATURE IMPORTANCE")
+    print("========================================")
+    print(importance.to_string(index=False))
 
-importance = importance.sort_values(
-    by="importance",
-    ascending=False
-)
+    # Save trained model and scaler
+    model_path = "models/random_forest.pkl"
+    scaler_path = "models/rf_scaler.pkl"
+    joblib.dump(model, model_path)
+    joblib.dump(scaler, scaler_path)
 
-print("\n========================================")
-print("FEATURE IMPORTANCE")
-print("========================================")
+    print(f"\nModel saved to {model_path}")
+    print(f"Scaler saved to {scaler_path}")
 
-print(importance.to_string(index=False))
-
-# Save trained model
-joblib.dump(model, "models/random_forest.pkl")
-
-print("Random Forest model saved successfully!")
+if __name__ == "__main__":
+    train_and_evaluate_rf()
