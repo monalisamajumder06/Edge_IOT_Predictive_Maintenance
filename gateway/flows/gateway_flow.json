@@ -1,0 +1,382 @@
+[
+  {
+    "id": "tab_gateway_pipeline",
+    "type": "tab",
+    "label": "Member 3 Gateway Ingestion & Persistence",
+    "disabled": false,
+    "info": "Phase 2 & Phase 3 Gateway Pipeline for Edge-IoT Predictive Maintenance Platform.\nSubscribes to motors/+/prediction, parses JSON safely, validates telemetry contract, attaches fallback timestamp, bifurcates accepted vs rejected messages, serializes accepted telemetry to InfluxDB Line Protocol, and writes to InfluxDB v2 bucket."
+  },
+  {
+    "id": "broker_mosquitto_local",
+    "type": "mqtt-broker",
+    "name": "Mosquitto Local Broker",
+    "broker": "localhost",
+    "port": "1883",
+    "clientid": "nodered_gateway_listener",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "autoUnsubscribe": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willPayload": "",
+    "willMsg": {},
+    "userProps": "",
+    "sessionExpiry": ""
+  },
+  {
+    "id": "mqtt_in_prediction",
+    "type": "mqtt in",
+    "z": "tab_gateway_pipeline",
+    "name": "MQTT In: motors/+/prediction",
+    "topic": "motors/+/prediction",
+    "qos": "1",
+    "datatype": "utf8",
+    "broker": "broker_mosquitto_local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 140,
+    "wires": [
+      [
+        "json_parser_node"
+      ]
+    ]
+  },
+  {
+    "id": "inject_test_valid",
+    "type": "inject",
+    "z": "tab_gateway_pipeline",
+    "name": "Inject: Valid Sample (motor_01)",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "motors/motor_01/prediction",
+    "payload": "{\"device_id\":\"motor_01\",\"fault_type\":\"Inner_Race\",\"health_index\":0.88,\"rul_hours\":420}",
+    "payloadType": "str",
+    "x": 170,
+    "y": 220,
+    "wires": [
+      [
+        "json_parser_node"
+      ]
+    ]
+  },
+  {
+    "id": "inject_test_malformed",
+    "type": "inject",
+    "z": "tab_gateway_pipeline",
+    "name": "Inject: Malformed JSON",
+    "props": [
+      {
+        "p": "payload"
+      },
+      {
+        "p": "topic",
+        "vt": "str"
+      }
+    ],
+    "repeat": "",
+    "crontab": "",
+    "once": false,
+    "onceDelay": 0.1,
+    "topic": "motors/motor_01/prediction",
+    "payload": "{\"device_id\":\"motor_01\", INVALID_JSON",
+    "payloadType": "str",
+    "x": 160,
+    "y": 280,
+    "wires": [
+      [
+        "json_parser_node"
+      ]
+    ]
+  },
+  {
+    "id": "json_parser_node",
+    "type": "json",
+    "z": "tab_gateway_pipeline",
+    "name": "Parse JSON",
+    "property": "payload",
+    "action": "obj",
+    "pretty": false,
+    "x": 410,
+    "y": 140,
+    "wires": [
+      [
+        "func_validate_and_normalize"
+      ]
+    ]
+  },
+  {
+    "id": "catch_json_parse_errors",
+    "type": "catch",
+    "z": "tab_gateway_pipeline",
+    "name": "Catch Parse Errors",
+    "scope": [
+      "json_parser_node"
+    ],
+    "uncaught": false,
+    "x": 430,
+    "y": 300,
+    "wires": [
+      [
+        "func_format_parse_rejection"
+      ]
+    ]
+  },
+  {
+    "id": "func_format_parse_rejection",
+    "type": "function",
+    "z": "tab_gateway_pipeline",
+    "name": "Format Parse Rejection",
+    "func": "msg.payload = {\n    status: \"REJECTED\",\n    disposition: \"REJECTED\",\n    reason: \"Malformed JSON syntax - payload cannot be parsed\",\n    parse_error: (msg.error && msg.error.message) ? msg.error.message : \"Invalid JSON string\",\n    topic: msg.topic || \"unknown\",\n    raw_payload: msg.payload,\n    gateway_received_at: new Date().toISOString()\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 670,
+    "y": 300,
+    "wires": [
+      [
+        "debug_gateway_rejected"
+      ]
+    ]
+  },
+  {
+    "id": "func_validate_and_normalize",
+    "type": "function",
+    "z": "tab_gateway_pipeline",
+    "name": "Validate & Normalize Telemetry",
+    "func": "const topic = msg.topic || \"\";\nconst payload = msg.payload;\nconst arrivalTime = new Date().toISOString();\n\n// 1. Verify Topic Pattern: motors/{device_id}/prediction\nconst topicParts = topic.split('/');\nif (topicParts.length !== 3 || topicParts[0] !== 'motors' || topicParts[2] !== 'prediction') {\n    msg.payload = {\n        status: \"REJECTED\",\n        disposition: \"REJECTED\",\n        reason: `Invalid topic structure: '${topic}'. Expected 'motors/{device_id}/prediction'`,\n        topic: topic,\n        raw_payload: payload,\n        gateway_received_at: arrivalTime\n    };\n    return [null, msg]; // Route to Output 2 (Rejected)\n}\nconst topicDeviceId = topicParts[1];\n\n// 2. Verify Payload is a JSON Object\nif (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {\n    msg.payload = {\n        status: \"REJECTED\",\n        disposition: \"REJECTED\",\n        reason: \"Payload must be a JSON object\",\n        topic: topic,\n        raw_payload: payload,\n        gateway_received_at: arrivalTime\n    };\n    return [null, msg];\n}\n\n// 3. Verify Required Core Fields (Phase 1 Project Requirement)\nconst missing = [];\nif (typeof payload.device_id !== 'string' || payload.device_id.trim() === '') missing.push('device_id');\nif (typeof payload.fault_type !== 'string' || payload.fault_type.trim() === '') missing.push('fault_type');\nif (payload.health_index === undefined || payload.health_index === null) missing.push('health_index');\nif (payload.rul_hours === undefined || payload.rul_hours === null) missing.push('rul_hours');\n\nif (missing.length > 0) {\n    msg.payload = {\n        status: \"REJECTED\",\n        disposition: \"REJECTED\",\n        reason: `Missing or empty required field(s): ${missing.join(', ')}`,\n        topic: topic,\n        raw_payload: payload,\n        gateway_received_at: arrivalTime\n    };\n    return [null, msg];\n}\n\n// 4. Verify Field Types\nif (typeof payload.health_index !== 'number' || isNaN(payload.health_index)) {\n    msg.payload = {\n        status: \"REJECTED\",\n        disposition: \"REJECTED\",\n        reason: `Invalid data type for 'health_index': expected number, got ${typeof payload.health_index}`,\n        topic: topic,\n        raw_payload: payload,\n        gateway_received_at: arrivalTime\n    };\n    return [null, msg];\n}\n\nif (typeof payload.rul_hours !== 'number' || isNaN(payload.rul_hours)) {\n    msg.payload = {\n        status: \"REJECTED\",\n        disposition: \"REJECTED\",\n        reason: `Invalid data type for 'rul_hours': expected number, got ${typeof payload.rul_hours}`,\n        topic: topic,\n        raw_payload: payload,\n        gateway_received_at: arrivalTime\n    };\n    return [null, msg];\n}\n\n// 5. Verify Topic Device ID matches Payload Device ID\nif (payload.device_id !== topicDeviceId) {\n    msg.payload = {\n        status: \"REJECTED\",\n        disposition: \"REJECTED\",\n        reason: `Topic / payload device_id mismatch: topic specifies '${topicDeviceId}', but payload contains '${payload.device_id}'`,\n        topic: topic,\n        raw_payload: payload,\n        gateway_received_at: arrivalTime\n    };\n    return [null, msg];\n}\n\n// 6. Timestamp Ingestion Fallback (Phase 1 Recommendation: preserve edge timestamp if present, else fallback)\nconst timestamp = payload.timestamp || arrivalTime;\n\n// 7. Prepare Normalized Output for Gateway Downstream (Phase 3 InfluxDB Sink)\nconst normalized = {\n    status: \"ACCEPTED\",\n    disposition: \"ACCEPTED\",\n    device_id: payload.device_id,\n    fault_type: payload.fault_type,\n    health_index: Number(payload.health_index),\n    rul_hours: Number(payload.rul_hours),\n    timestamp: timestamp,\n    gateway_received_at: arrivalTime,\n    topic: topic\n};\n\nmsg.payload = normalized;\nreturn [msg, null]; // Route to Output 1 (Accepted)",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 670,
+    "y": 140,
+    "wires": [
+      [
+        "debug_gateway_accepted",
+        "func_transform_line_protocol"
+      ],
+      [
+        "debug_gateway_rejected"
+      ]
+    ]
+  },
+  {
+    "id": "debug_gateway_accepted",
+    "type": "debug",
+    "z": "tab_gateway_pipeline",
+    "name": "[GATEWAY ACCEPTED]",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 970,
+    "y": 140,
+    "wires": []
+  },
+  {
+    "id": "debug_gateway_rejected",
+    "type": "debug",
+    "z": "tab_gateway_pipeline",
+    "name": "[GATEWAY REJECTED]",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 970,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "func_transform_line_protocol",
+    "type": "function",
+    "z": "tab_gateway_pipeline",
+    "name": "Transform to Line Protocol",
+    "func": "// Phase 3 InfluxDB Line Protocol Formatter\n// Consumes validated & normalized Phase 2 Output 1\nconst normalized = msg.payload;\n\n// Retrieve configuration dynamically using Node-RED env.get() API [IMPLEMENTATION DECISION]\nconst influxUrl = (env.get(\"INFLUXDB_URL\") || \"http://localhost:8086\").replace(/\\/+$/, \"\");\nconst influxOrg = env.get(\"INFLUXDB_ORG\") || \"industrial_iot\";\nconst influxBucket = env.get(\"INFLUXDB_BUCKET\") || \"motor_telemetry\";\nconst influxToken = env.get(\"INFLUXDB_TOKEN\") || \"my-secure-placeholder-token\";\n\n// 1. Tag escaping (commas, spaces, equal signs)\nconst rawDeviceId = String(normalized.device_id || \"\").trim();\nconst escapedDeviceId = rawDeviceId\n    .replace(/\\\\/g, \"\\\\\\\\\")\n    .replace(/,/g, \"\\\\,\")\n    .replace(/ /g, \"\\\\ \")\n    .replace(/=/g, \"\\\\=\");\n\n// 2. String field escaping (enclosed in double quotes, backslashes and quotes escaped)\nconst rawFault = String(normalized.fault_type || \"\").trim();\nconst escapedFault = rawFault\n    .replace(/\\\\/g, \"\\\\\\\\\")\n    .replace(/\"/g, '\\\\\"');\n\n// 3. Numeric float formatting\nconst health = Number(normalized.health_index);\nconst rul = Number(normalized.rul_hours);\n\n// 4. Timestamp conversion to ms epoch\nlet tsMs = Date.now();\nif (normalized.timestamp) {\n    const parsed = new Date(normalized.timestamp).getTime();\n    if (!isNaN(parsed) && parsed > 0) {\n        tsMs = parsed;\n    }\n}\n\n// 5. Construct Line Protocol: predictions,device_id=<tag> fault_type=\"<val>\",health_index=<float>,rul_hours=<float> <epoch_ms>\nconst lineProtocol = `predictions,device_id=${escapedDeviceId} fault_type=\"${escapedFault}\",health_index=${health},rul_hours=${rul} ${tsMs}`;\n\n// Prepare HTTP request message\nmsg.telemetry = normalized;\nmsg.url = `${influxUrl}/api/v2/write?org=${encodeURIComponent(influxOrg)}&bucket=${encodeURIComponent(influxBucket)}&precision=ms`;\nmsg.headers = {\n    \"Authorization\": `Token ${influxToken}`,\n    \"Content-Type\": \"text/plain; charset=utf-8\"\n};\nmsg.method = \"POST\";\nmsg.payload = lineProtocol;\n\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 980,
+    "y": 60,
+    "wires": [
+      [
+        "http_influxdb_write"
+      ]
+    ]
+  },
+  {
+    "id": "http_influxdb_write",
+    "type": "http request",
+    "z": "tab_gateway_pipeline",
+    "name": "HTTP: Write to InfluxDB",
+    "method": "use",
+    "ret": "txt",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "insecureHTTPParser": false,
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 1250,
+    "y": 60,
+    "wires": [
+      [
+        "func_handle_influx_response"
+      ]
+    ]
+  },
+  {
+    "id": "catch_influxdb_network_error",
+    "type": "catch",
+    "z": "tab_gateway_pipeline",
+    "name": "Catch InfluxDB Errors",
+    "scope": [
+      "http_influxdb_write"
+    ],
+    "uncaught": false,
+    "x": 1250,
+    "y": 140,
+    "wires": [
+      [
+        "func_format_influx_outage"
+      ]
+    ]
+  },
+  {
+    "id": "func_format_influx_outage",
+    "type": "function",
+    "z": "tab_gateway_pipeline",
+    "name": "Handle InfluxDB Outage",
+    "func": "// Handles network/connection failures to InfluxDB without crashing Node-RED\nmsg.payload = {\n    status: \"DB_UNAVAILABLE\",\n    disposition: \"WRITE_FAILED\",\n    reason: \"InfluxDB network unreachable or connection refused\",\n    error_message: (msg.error && msg.error.message) ? msg.error.message : \"Connection failed\",\n    device_id: msg.telemetry ? msg.telemetry.device_id : \"unknown\",\n    target_url: msg.url,\n    gateway_received_at: (msg.telemetry && msg.telemetry.gateway_received_at) ? msg.telemetry.gateway_received_at : new Date().toISOString()\n};\nreturn msg;",
+    "outputs": 1,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1490,
+    "y": 140,
+    "wires": [
+      [
+        "debug_influx_unavailable"
+      ]
+    ]
+  },
+  {
+    "id": "func_handle_influx_response",
+    "type": "function",
+    "z": "tab_gateway_pipeline",
+    "name": "Check InfluxDB Response",
+    "func": "// InfluxDB v2 returns HTTP 204 No Content upon successful write\nconst statusCode = msg.statusCode;\nif (statusCode === 204) {\n    msg.payload = {\n        status: \"DB_WRITE_SUCCESS\",\n        disposition: \"STORED\",\n        status_code: 204,\n        device_id: msg.telemetry ? msg.telemetry.device_id : \"unknown\",\n        telemetry: msg.telemetry,\n        stored_at: new Date().toISOString()\n    };\n    return [msg, null];\n} else {\n    msg.payload = {\n        status: \"DB_WRITE_ERROR\",\n        disposition: \"REJECTED_BY_DB\",\n        status_code: statusCode,\n        db_response: msg.payload,\n        device_id: msg.telemetry ? msg.telemetry.device_id : \"unknown\",\n        failed_at: new Date().toISOString()\n    };\n    return [null, msg];\n}",
+    "outputs": 2,
+    "timeout": 0,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 1490,
+    "y": 60,
+    "wires": [
+      [
+        "debug_influx_success"
+      ],
+      [
+        "debug_influx_failed"
+      ]
+    ]
+  },
+  {
+    "id": "debug_influx_success",
+    "type": "debug",
+    "z": "tab_gateway_pipeline",
+    "name": "[INFLUXDB SUCCESS]",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1750,
+    "y": 40,
+    "wires": []
+  },
+  {
+    "id": "debug_influx_failed",
+    "type": "debug",
+    "z": "tab_gateway_pipeline",
+    "name": "[INFLUXDB WRITE FAILED]",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1770,
+    "y": 90,
+    "wires": []
+  },
+  {
+    "id": "debug_influx_unavailable",
+    "type": "debug",
+    "z": "tab_gateway_pipeline",
+    "name": "[INFLUXDB UNAVAILABLE]",
+    "active": true,
+    "tosidebar": true,
+    "console": true,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1770,
+    "y": 140,
+    "wires": []
+  }
+]

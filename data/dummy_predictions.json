@@ -1,0 +1,23 @@
+[
+  {
+    "_comment": "[PROJECT SPECIFICATION EXAMPLE] Verbatim sample from project requirements",
+    "device_id": "motor_01",
+    "fault_type": "Inner_Race",
+    "health_index": 0.88,
+    "rul_hours": 420
+  },
+  {
+    "_comment": "[SYNTHETIC TEST DATA ONLY] For testing pipeline data flow and schema verification; NOT an official project fault class",
+    "device_id": "motor_01",
+    "fault_type": "Synthetic_Test_Fault_A",
+    "health_index": 0.55,
+    "rul_hours": 180
+  },
+  {
+    "_comment": "[SYNTHETIC TEST DATA ONLY] Multi-motor simulation testing (motor_02); NOT an official project fault class",
+    "device_id": "motor_02",
+    "fault_type": "Synthetic_Test_Fault_B",
+    "health_index": 0.92,
+    "rul_hours": 650
+  }
+]

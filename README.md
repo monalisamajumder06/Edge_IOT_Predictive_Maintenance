@@ -1,123 +1,132 @@
-# Edge-IoT Predictive Maintenance
+# Edge-IoT Predictive Maintenance Platform for Industrial Motors
+## Subsystem: IoT + Backend + Dashboard (Member 3)
 
-## Overview
-This project aims to build a robust Predictive Maintenance (PdM) system for industrial motors and bearings. By analyzing vibration data, the system detects mechanical faults early, preventing catastrophic machine failures and minimizing unscheduled downtime. 
+This repository hosts the IoT messaging, gateway buffering, time-series storage, backend API, and visualization dashboard for the **Edge-IoT Predictive Maintenance Platform for Industrial Motors**.
 
-The ultimate goal is to deploy an end-to-end Edge-IoT pipeline: collecting data from sensors, running localized inference on Edge microcontrollers (TinyML), and transmitting health diagnostics to an IoT dashboard for monitoring. 
+---
 
-**Note:** The project is actively under development in stages. The current repository contains the **Machine Learning Fault Classification Baseline**, which operates on the CWRU dataset.
+## 1. High-Level Architecture
 
-## Problem Statement
-Industrial bearings undergo continuous stress, making them highly susceptible to progressive degradation. Traditional maintenance strategies (run-to-failure or routine-based) are either dangerous or highly inefficient. Predictive maintenance utilizes machine learning to recognize anomalous vibration signatures and classify specific defect types (e.g., inner race, outer race, or ball faults) well before a failure occurs.
+The end-to-end platform integrates edge sensing, TinyML edge inference, and an industrial IoT stack:
 
-## Current System Pipeline
-The currently implemented pipeline processes offline vibration datasets, extracts features, and performs machine learning classification.
-
-```text
-Raw CWRU Vibration Data
-        ↓
-Signal Segmentation (1-sec windows, 50% overlap)
-        ↓
-Feature Extraction (Time & Frequency Domain)
-        ↓
-Leakage-safe Train/Test Split (Experiment-level)
-        ↓
-ML Fault Classification (LogReg, SVM, RF)
-        ↓
-Evaluation (Accuracy, Precision, Recall, F1, Confusion Matrices)
+```
+Motor Sensors (ADXL355, SCT-013, MLX90614, INMP441)
+    ↓
+ESP32-S3 / STM32H7 Edge MCU
+    ↓
+Signal Processing (FFT, RMS, Kurtosis, Skewness, Crest Factor, Log-Mel)
+    ↓
+TinyML Fault Classification & RUL Estimation
+    ↓
+MQTT Telemetry (JSON Payload)
+    ↓
+Raspberry Pi Gateway (Mosquitto / Node-RED)
+    ↓
+InfluxDB (Time-Series Storage) [PHASE 3 COMPLETE]
+    ↓
+FastAPI (Backend Application & Data Access) [PHASE 4 COMPLETE]
+    ↓
+Streamlit (Technician Dashboard) [PHASE 5 COMPLETE]
 ```
 
-## Dataset
-The current implementation utilizes the **Case Western Reserve University (CWRU) Bearing Dataset**. 
-- **Raw Data:** `.mat` files containing Drive-End vibration signals.
-- **Classes:** Normal, Inner Race Fault, Outer Race Fault, Ball Fault.
+---
 
-## Extracted Features
-The feature engineering pipeline (`src/preprocessing.py`) extracts the following metrics from each signal window:
-*   **Time-Domain:** RMS, Mean, Standard Deviation, Peak, Peak-to-Peak, Skewness, Kurtosis, Crest Factor.
-*   **Frequency-Domain (FFT):** Dominant Frequency, Spectral Centroid, Spectral Bandwidth, Spectral Energy.
+## 2. Team Boundaries
 
-## Current ML Models
-We have established three classification baselines for benchmarking:
-1.  **Logistic Regression:** A linear baseline.
-2.  **Support Vector Machine (SVM):** Utilizing an RBF kernel for non-linear boundary detection.
-3.  **Random Forest:** An ensemble decision-tree classifier.
+* **Member 1**: Sensor interfacing, data acquisition, and signal processing (FFT, RMS, time/frequency domain feature extraction).
+* **Member 2**: Lightweight 1D Depthwise Separable CNN, multi-label fault classification, RUL regression, and INT8 TinyML deployment on MCU.
+* **Member 3 (This Subsystem)**: MQTT topic/payload contracts, Raspberry Pi gateway routing/buffering, InfluxDB time-series storage, FastAPI backend, and Streamlit dashboard visualization.
 
-Data leakage is strictly prevented by splitting the dataset at the **experiment/file level** rather than randomizing individual windows. This ensures models generalize to entirely unseen vibration recordings.
+---
 
-## Project Structure
-```text
-Edge_IOT_Predictive_Maintenance/
-├── data/
-│   ├── raw/CWRU/               # Raw .mat CWRU files (User provided)
-│   └── processed/              # Generated cwru_features.csv, plots, status files
-├── models/                     # Saved .pkl models and scalers
-├── src/
-│   ├── preprocessing.py        # Signal segmentation and feature extraction
-│   ├── data_loader.py          # Leakage-safe dataset splitting
-│   ├── train_logreg.py         # Logistic Regression baseline training
-│   ├── train_svm.py            # SVM baseline training
-│   ├── train_model.py          # Random Forest baseline training
-│   ├── compare_models.py       # Multi-model evaluation and comparison
-│   ├── plot_results.py         # Confusion matrix and feature importance visualization
-│   └── predict.py              # Inference script for classifying a raw .mat file
-└── README.md                   # Project documentation
+## 3. Repository Structure
+
+```
+Industrial_Edge-AI/
+├── README.md                      # Project documentation and Member 3 guide
+├── docs/                          # Architectural specifications & contracts
+│   ├── member3_system_boundary.md # Formal delineation of team responsibilities
+│   ├── telemetry_contract.md      # Telemetry schema, field specs, contract versioning
+│   ├── mqtt_topics.md             # MQTT topic conventions, QoS, and retention rules
+│   ├── data_flow.md               # End-to-end data flow (Phase 1 dummy vs future real MCU)
+│   ├── integration_open_decisions.md # Open decisions matrix & team coordination log
+│   ├── influxdb_storage_schema.md # InfluxDB storage schema, Line Protocol & Flux recipes
+│   ├── fastapi_api.md             # Phase 4 REST API specification and endpoint docs
+│   └── dashboard.md               # Phase 5 Dashboard architecture & operator manual
+├── config/                        # Configuration loader and settings
+│   ├── __init__.py
+│   └── settings.py                # Centralized settings with environment variable overrides
+├── schemas/                       # Pydantic v2 data models and contract validators
+│   ├── __init__.py
+│   └── telemetry.py               # CoreTelemetryPayload definition
+├── data/                          # Grounded dummy prediction datasets for testing
+│   └── dummy_predictions.json
+├── gateway/                       # Raspberry Pi gateway & Node-RED routing (Phases 2 & 3)
+│   ├── README.md                  # Comprehensive gateway documentation & run guide
+│   ├── dummy_publisher.py         # Python MQTT telemetry publisher (Normal & Test modes)
+│   ├── line_protocol.py           # InfluxDB Line Protocol serializer for Phase 2 Output 1
+│   ├── mosquitto/
+│   │   └── mosquitto.conf         # Mosquitto broker configuration (MQTT 5.0/3.1.1, port 1883)
+│   └── flows/
+│       └── gateway_flow.json      # Node-RED gateway ingestion, validation & InfluxDB write flow
+├── scripts/                       # Database setup, initialization & query utilities
+│   ├── setup_influxdb_windows.ps1 # Setup and start local InfluxDB on Windows
+│   ├── init_influxdb.py           # Idempotent InfluxDB onboarding & bucket creation
+│   └── query_influxdb.py          # Direct Flux query utility for verifying stored data
+├── backend/                       # FastAPI application & InfluxDB query service (Phase 4)
+│   ├── README.md                  # Backend documentation & endpoint reference
+│   ├── main.py                    # FastAPI application factory & lifecycle management
+│   ├── routes/                    # Route handlers (/health, /api/motors)
+│   ├── schemas/                   # Pydantic response models
+│   └── services/                  # InfluxDB async query service
+├── dashboard/                     # Streamlit visual interface (Phase 5)
+│   ├── README.md                  # Dashboard execution guide
+│   ├── app.py                     # Streamlit application entrypoint
+│   ├── api_client.py              # Dedicated HTTP client for FastAPI REST endpoints
+│   └── components.py              # Reusable UI widgets, metrics cards, and charts
+└── tests/                         # Automated test suite (104 tests)
+    ├── __init__.py
+    ├── test_telemetry_contract.py # Telemetry contract schema validation tests
+    ├── test_mqtt_publisher.py     # Publisher logic & topic construction tests
+    ├── test_influxdb_storage.py   # Unit tests for Line Protocol serialization & storage
+    ├── test_influxdb_integration.py # Live InfluxDB integration tests
+    ├── test_fastapi_backend.py    # Unit tests for FastAPI endpoints and error handling
+    ├── test_fastapi_integration.py# Live integration tests for FastAPI against InfluxDB
+    ├── test_dashboard_api_client.py # Unit tests for DashboardApiClient
+    └── test_dashboard_components.py # Unit tests for UI components and data transformation
 ```
 
-## Installation
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/monalisamajumder06/Edge_IOT_Predictive_Maintenance.git
-   cd Edge_IOT_Predictive_Maintenance
-   ```
-2. Ensure you have Python 3.8+ installed. Install the required dependencies:
-   ```bash
-   pip install pandas numpy scipy scikit-learn matplotlib joblib
-   ```
-3. Place the raw CWRU `.mat` files into `data/raw/CWRU/`.
+---
 
-## Usage
-Run the pipeline sequentially using the following commands from the root directory:
+## 4. Verification & Testing
 
-1. **Extract Features:**
-   ```bash
-   python src/preprocessing.py
+### Automated Test Suite (104 Tests)
+To run all unit and integration tests across the project:
+```bash
+python -m pytest tests/ -v
+```
+
+### End-to-End Software Stack Execution
+1. **Start InfluxDB** (Port 8086):
+   ```powershell
+   .\scripts\setup_influxdb_windows.ps1 -Start -Init
    ```
-2. **Train Baseline Models:**
+2. **Start Mosquitto Broker** (Port 1883).
+3. **Start Node-RED Gateway** (Port 1880):
    ```bash
-   python src/train_logreg.py
-   python src/train_svm.py
-   python src/train_model.py
+   node-red gateway/flows/gateway_flow.json
    ```
-3. **Compare Models & Evaluate:**
+4. **Start FastAPI Backend** (Port 8000):
    ```bash
-   python src/compare_models.py
-   python src/plot_results.py
+   python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
    ```
-4. **Run Inference on a new file:**
+5. **Start Streamlit Dashboard** (Port 8501):
    ```bash
-   python src/predict.py
+   python -m streamlit run dashboard/app.py --server.port 8501
    ```
-
-## Current Status & Roadmap
-
-### ✅ Implemented
-*   CWRU signal preprocessing and feature extraction.
-*   Leakage-safe train/test infrastructure.
-*   Fault classification baselines (Logistic Regression, SVM, Random Forest).
-*   Model evaluation and performance comparison.
-*   Single-file prediction pipeline.
-
-### ⏳ Planned (Future Work)
-*   **Remaining Useful Life (RUL):** Prediction of exact time-to-failure (Pending integration of a suitable degradation dataset).
-*   **Advanced Architectures:** 1D Depthwise-Separable CNN, Shared backbone for joint Fault/RUL prediction.
-*   **Edge Optimization:** INT8 Quantization, TinyML model conversion.
-*   **Hardware Deployment:** Flashing to edge hardware (e.g., ESP32, STM32, Raspberry Pi).
-*   **IoT & Backend:** Real-time sensor streaming via MQTT, FastAPI backend, InfluxDB time-series storage.
-*   **Monitoring:** Live health dashboard via Grafana or Node-RED.
-
-## Technical Stack
-*   **Language:** Python
-*   **Data Processing:** Pandas, NumPy, SciPy
-*   **Machine Learning:** Scikit-Learn
-*   **Visualization:** Matplotlib
+6. **Publish Telemetry** (Normal Mode):
+   ```bash
+   python gateway/dummy_publisher.py --mode normal --once
+   ```
+7. **View Dashboard**:
+   Open browser at `http://localhost:8501`.
