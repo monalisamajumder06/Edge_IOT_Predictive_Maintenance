@@ -1,5 +1,39 @@
 .venv/
+env/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+
+# Pytest & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local Environment & Secrets
+.env
+.env.local
+
+# InfluxDB portable binaries and database storage
+bin/
+*.bolt
+*.sqlite
+*.wal
+*.tsm
+*.tsi
+*.tsl
+
+# Node-RED dependencies and runtime state
+node_modules/
+gateway/.nodered/node_modules/
+gateway/.nodered/.config.runtime.json.backup
+
+# Data files
 data/raw/
 data/interim/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
