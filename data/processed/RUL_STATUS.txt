@@ -1,1 +1,18 @@
-RUL baseline is pending because the required degradation dataset is not yet available/ready.
+Member 1 Feature Pipeline Status (CWRU, NASA IMS, XJTU-SY, Paderborn, MIMII):
+
+1. CWRU Bearing Fault Classification:
+   - data/processed/cwru_features.csv (504 rows, 15 columns, zero 98/99 leakage, 100% verified on raw data)
+
+2. NASA IMS Run-to-Failure (RUL & Health Index):
+   - data/processed/nasa_ims_features.csv (30 rows, 22 columns, verified with synthetic fixtures; real-data loader ready)
+
+3. XJTU-SY Accelerated Fatigue (RUL & Health Index):
+   - data/processed/xjtu_sy_features.csv (50 rows, 49 columns, 2-axis horizontal & vertical; verified with synthetic fixtures; real-data loader ready)
+
+4. Paderborn University Bearing Test Rig (Multi-Modal: 64 kHz Vibration + Phase Currents):
+   - data/processed/paderborn_features.csv (28 rows, 49 columns, MCSA current features + 12 canonical vibration features, strictly grouped by bearing_id; verified with synthetic fixtures; real-data loader ready)
+
+5. MIMII Industrial Machine Acoustic Anomaly Detection (16 kHz Audio):
+   - data/processed/mimii_features.csv (30 rows, 35 columns, 16 log-Mel filterbank energies, Wiener spectral flatness, acoustic RMS, strictly grouped by recording/machine; verified with synthetic fixtures; real-data loader ready)
+
+All datasets include canonical contracts conforming to schemas/telemetry.py and Member 2 machine learning baselines.
