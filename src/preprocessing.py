@@ -3,6 +3,7 @@ from scipy.stats import skew, kurtosis
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import re
 
 
 # ============================================================
@@ -10,8 +11,14 @@ from pathlib import Path
 # ============================================================
 
 def load_vibration_signal(file_path):
-    """Load the Drive-End vibration signal from a CWRU .mat file."""
+    """Load the Drive-End vibration signal from a CWRU .mat file.
 
+    Selects the specific Drive-End variable associated with the file's numeric
+    identifier (e.g. 'X099_DE_time' for '99.mat') to prevent loading stale
+    variables present in multi-signal MAT files.
+    """
+
+    file_path = Path(file_path)
     data = loadmat(file_path)
 
     de_keys = [
@@ -24,11 +31,30 @@ def load_vibration_signal(file_path):
             f"No Drive-End vibration signal found in {file_path}"
         )
 
-    # Some CWRU files contain more than one DE signal.
-    # We use the first valid Drive-End signal.
-    signal = data[de_keys[0]].flatten()
+    # Extract numeric identifier from filename stem (e.g. '99' from '99.mat')
+    match = re.search(r"(\d+)", file_path.stem)
+    if match:
+        file_num = int(match.group(1))
+        matching_keys = [
+            k for k in de_keys
+            if re.search(rf"^X0*{file_num}_DE_time$", k)
+        ]
+        if len(matching_keys) == 1:
+            return data[matching_keys[0]].flatten()
+        elif len(matching_keys) > 1:
+            raise ValueError(
+                f"Ambiguous Drive-End signals matching file ID {file_num} in {file_path}: {matching_keys}"
+            )
 
-    return signal
+    # Fallback if filename has no numeric ID or if exactly one DE key exists
+    if len(de_keys) == 1:
+        return data[de_keys[0]].flatten()
+
+    raise ValueError(
+        f"Multiple Drive-End signals found in {file_path} ({de_keys}) "
+        f"but none unambiguously matched file ID '{file_path.stem}'."
+    )
+
 
 
 # ============================================================
