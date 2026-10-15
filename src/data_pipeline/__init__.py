@@ -22,6 +22,7 @@ from .nasa_ims import (
     load_ims_snapshot_file,
     parse_ims_filename_timestamp,
     generate_synthetic_ims_experiment,
+    resolve_ims_channel,
 )
 from .xjtu_sy import (
     process_xjtu_bearing_experiment,
@@ -70,6 +71,7 @@ __all__ = [
     "load_ims_snapshot_file",
     "parse_ims_filename_timestamp",
     "generate_synthetic_ims_experiment",
+    "resolve_ims_channel",
     "process_xjtu_bearing_experiment",
     "load_xjtu_snapshot_file",
     "generate_synthetic_xjtu_experiment",
