@@ -15,7 +15,7 @@ src/data_pipeline/
 ├── __init__.py          # Public API exports for all datasets
 ├── features.py          # Unified 12/15 vibration feature extraction (pure NumPy/SciPy)
 ├── rul_targets.py       # Linear RUL, Piecewise RUL, and Health Index [1.0 -> 0.0]
-├── nasa_ims.py          # NASA IMS 20 kHz ASCII loader & run-to-failure pipeline
+├── nasa_ims.py          # NASA IMS 20 kHz ASCII loader & run-to-failure pipeline (4-Ch & 8-Ch)
 ├── xjtu_sy.py           # XJTU-SY 25.6 kHz 2-axis CSV loader & RUL pipeline
 ├── paderborn.py         # Paderborn 64 kHz multi-channel (vibration + phase current) pipeline
 ├── mimii.py             # MIMII 16 kHz acoustic audio WAV & log-Mel filterbank pipeline
@@ -29,14 +29,74 @@ src/data_pipeline/
 | Dataset | Modality | Native Sampling Rate ($f_s$) | Primary Maintenance Task | File Format | Snapshot / Frame Cadence |
 | :--- | :--- | :---: | :--- | :--- | :--- |
 | **CWRU** | 1-Axis Vibration (DE) | 12,000 Hz | Discrete Bearing Fault Classification | MATLAB `.mat` | Continuous runs |
-| **NASA IMS** | 4-Channel Vibration | 20,000 Hz | Run-to-Failure Degradation & RUL | ASCII tab/space delimited | 20,480 samples every 10 min |
+| **NASA IMS** | 4-Ch / 8-Ch Vibration | 20,000 Hz | Run-to-Failure Degradation & RUL | ASCII tab/space delimited | 20,480 samples every 10 or 5 min |
 | **XJTU-SY** | 2-Axis Vibration (Horiz & Vert) | 25,600 Hz | Accelerated Fatigue Degradation & RUL | 2-column CSV | 32,768 samples every 1 min |
 | **Paderborn** | Multi-Channel (Vibration + 2 Motor Phase Currents) | 64,000 Hz | Motor Current Signature Analysis & Bearing Fault Classification | MATLAB `.mat` | Continuous 64 kHz sync runs |
 | **MIMII** | 8-Ch Acoustic Audio (Mic Array / Single Ch) | 16,000 Hz | Industrial Machine Acoustic Anomaly Detection | 16-bit PCM `.wav` | 10-second recordings (1s frames) |
 
 ---
 
-## 3. Extracted Feature Definitions
+## 3. NASA IMS Run-to-Failure Specification & Channel Layout
+
+### A. Supported Raw Folder Structure
+NASA IMS files must be uncompressed into an experiment directory:
+```
+data/raw/NASA_IMS/<Set_folder>/
+├── 2004.02.12.10.32.39
+├── 2004.02.12.10.42.39
+└── ...
+```
+- **File Naming:** Strictly timestamped `YYYY.MM.DD.HH.MM.SS`. Non-matching files (e.g. `.DS_Store`, READMEs) are filtered out automatically.
+- **File Format:** Pure ASCII whitespace- or tab-delimited floating-point arrays without headers.
+- **Snapshots:** 20,480 samples recorded at 20,000 Hz (1.024 seconds recording per snapshot).
+
+### B. Explicit Channel Mapping & Layouts
+According to the official NASA / IMS Center documentation:
+
+#### 1. 4-Channel Configuration (Test 2 & Test 3)
+One radial PCB 353B33 accelerometer per bearing:
+| Bearing Number | Channel Index (0-based) | File Column | Default Label | Verified Fault Outcome |
+| :---: | :---: | :---: | :---: | :--- |
+| **Bearing 1** | `0` | Column 1 | `Bearing_1` | Outer race failure in Test 2 |
+| **Bearing 2** | `1` | Column 2 | `Bearing_2` | Undamaged (survived) |
+| **Bearing 3** | `2` | Column 3 | `Bearing_3` | Outer race failure in Test 3 |
+| **Bearing 4** | `3` | Column 4 | `Bearing_4` | Undamaged (survived) |
+
+*Mapping formula:* `channel_idx = target_bearing - 1`.
+
+#### 2. 8-Channel Configuration (Test 1)
+Two orthogonal accelerometers per bearing housing (X-axis = horizontal, Y-axis = vertical):
+| Bearing Number | Axis | Channel Index (0-based) | File Column | Default Label | Verified Fault Outcome |
+| :---: | :---: | :---: | :---: | :---: | :--- |
+| **Bearing 1** | X | `0` | Column 1 | `Bearing_1_x` | Undamaged |
+| **Bearing 1** | Y | `1` | Column 2 | `Bearing_1_y` | Undamaged |
+| **Bearing 2** | X | `2` | Column 3 | `Bearing_2_x` | Undamaged |
+| **Bearing 2** | Y | `3` | Column 4 | `Bearing_2_y` | Undamaged |
+| **Bearing 3** | X | `4` | Column 5 | `Bearing_3_x` | Inner race defect in Test 1 |
+| **Bearing 3** | Y | `5` | Column 6 | `Bearing_3_y` | Inner race defect in Test 1 |
+| **Bearing 4** | X | `6` | Column 7 | `Bearing_4_x` | Roller element defect in Test 1 |
+| **Bearing 4** | Y | `7` | Column 8 | `Bearing_4_y` | Roller element defect in Test 1 |
+
+*Mapping formula:* `channel_idx = (target_bearing - 1) * 2 + (0 if axis == 'x' else 1)`.
+
+### C. Sampling & Framing Assumptions
+- **Sampling Frequency ($f_s$):** 20,000 Hz.
+- **Window Size:** 1 second ($20,000$ samples @ 20 kHz).
+- **Framing Step:** If snapshot has 20,480 samples, 1 primary window (`window_id = 0`) is extracted starting at sample 0.
+
+### D. RUL Target Formulations & Failure-Point Assumptions
+- **Failure Point ($T_{\text{failure}}$):** The timestamp of the final valid snapshot in the experiment ($t_{\text{end}}$) is taken as the physical failure point for the designated failed bearing.
+- **Linear RUL:** $RUL(t) = \max(0.0, T_{\text{failure}} - t)$ in operating hours.
+- **Piecewise Linear RUL:** $RUL_{\text{piecewise}}(t) = \min(RUL(t), RUL_{\text{max}})$, capping early healthy operating hours (default first 60% of test or capped at $100.0$ hours) before decaying linearly to 0.0 operating hours at catastrophic failure.
+- **Health Index:** Continuous metric $HI(t) = \text{clip}((T_{\text{failure}} - t) / T_{\text{failure}}, 0.0, 1.0)$ ($1.0 = \text{healthy}, 0.0 = \text{failed}$), strictly complying with Member 3's `RecommendedTelemetryPayload` schema in [`schemas/telemetry.py`](file:///e:/Edge_IOT_Predictive_Maintenance/schemas/telemetry.py).
+
+### E. Limitations & Failure Mode Ground Truth
+- Non-failed bearings in the same test rig (e.g. Bearings 2, 3, and 4 in Set 2) did not experience catastrophic failure. They should **not** be assigned zero-hour failure targets unless evaluating survival classification.
+- In Set 1, dual-axis sensors provide complementary directional signals. Users can select either the `x` or `y` axis, or extract both sequentially.
+
+---
+
+## 4. Extracted Feature Definitions
 
 ### A. Vibration Features (CWRU, NASA IMS, XJTU-SY, Paderborn)
 Every 1-second vibration window is processed into canonical time- and frequency-domain features:
@@ -60,7 +120,6 @@ Every 1-second vibration window is processed into canonical time- and frequency-
 | `spectral_energy` | Freq | $\sum \|X(f)\|^2$ | Total frequency domain spectral power |
 
 ### B. Motor Current Signature Analysis (MCSA) Features (Paderborn)
-Extracts phase current dynamics to detect electrical unbalance, broken rotor bars, and load modulation:
 - `current_1_rms`, `current_1_mean`, `current_1_std`, `current_1_peak`, `current_1_crest_factor`.
 - `current_1_dominant_frequency_hz`: fundamental supply frequency (~50 Hz).
 - `current_1_spectral_energy`: total AC electrical current energy.
@@ -68,39 +127,23 @@ Extracts phase current dynamics to detect electrical unbalance, broken rotor bar
 - `current_phase_unbalance`: phase RMS disparity ratio $\frac{|I_1 - I_2|}{0.5(I_1 + I_2)}$.
 
 ### C. Acoustic Anomaly Features (MIMII)
-Extracts audio-specific features without flattening sound into standard accelerometer vibration:
 - `audio_rms`: root-mean-square sound pressure.
 - `audio_peak`: peak acoustic amplitude.
 - `audio_crest_factor`: sound spikiness.
 - `zero_crossing_rate`: frequency of sign changes.
 - `spectral_centroid_hz`: acoustic brightness.
 - `spectral_bandwidth_hz`: acoustic dispersion.
-- `spectral_flatness` (Wiener entropy): geometric mean divided by arithmetic mean of power spectrum ($0.0 \approx$ pure tone/whistle, $1.0 \approx$ white noise). Highly sensitive to squealing bearings and cavitation.
+- `spectral_flatness` (Wiener entropy): geometric mean divided by arithmetic mean of power spectrum ($0.0 \approx$ pure tone / squeal, $1.0 \approx$ white noise). Highly sensitive to squealing bearings and cavitation.
 - `spectral_rolloff_hz`: frequency below which 85% of sound power is concentrated.
 - `mel_band_00` to `mel_band_15`: 16 triangular log-Mel filterbank energies spanning 50 Hz to 8000 Hz.
-
----
-
-## 4. RUL Target Formulations (NASA IMS & XJTU-SY)
-
-For run-to-failure degradation tracking, targets are computed strictly along each individual bearing's timeline. **Failure time is never inferred from other bearings.**
-
-1. **Exact Linear RUL (`rul_hours_linear` / `rul_minutes_linear`):**
-   $$RUL(t) = \max(0.0, T_{\text{failure}} - t)$$
-2. **Piecewise-Linear RUL (`rul_hours_piecewise` / canonical `rul_hours`):**
-   $$RUL_{\text{piecewise}}(t) = \min(RUL(t), RUL_{\text{max}})$$
-   Caps the target during the early healthy plateau, followed by linear degradation to 0 operating hours.
-3. **Composite Health Index (`health_index`):**
-   $$HI(t) = \text{clip}\left(\frac{RUL(t)}{T_{\text{failure}}}, 0.0, 1.0\right)$$
-   Normalized continuous health state ($1.0 = \text{healthy}, 0.0 = \text{failed}$). Strictly complies with Member 3's `RecommendedTelemetryPayload` validation rule ($0.0 \le \text{health\_index} \le 1.0$).
 
 ---
 
 ## 5. Output Schemas for Member 2 & Member 3 Consumption
 
 ### A. NASA IMS Processed Dataset: `data/processed/nasa_ims_features.csv`
-- **Identifier Columns:** `experiment_id`, `bearing_id`, `snapshot_id`, `timestamp`, `elapsed_hours`.
-- **Feature Columns:** 12 canonical CWRU features + 3 extended degradation metrics.
+- **Identifier Columns:** `experiment_id`, `bearing_id`, `snapshot_id`, `timestamp`, `elapsed_hours`, `window_id`.
+- **Feature Columns:** 12 canonical CWRU features (`rms`, `std`, `kurtosis`, `spectral_energy`, etc.).
 - **Target Columns:** `health_index`, `rul_hours_linear`, `rul_hours_piecewise`, `rul_hours`.
 
 ### B. XJTU-SY Processed Dataset: `data/processed/xjtu_sy_features.csv`
@@ -110,17 +153,13 @@ For run-to-failure degradation tracking, targets are computed strictly along eac
 
 ### C. Paderborn Processed Dataset: `data/processed/paderborn_features.csv`
 - **Identifier Columns:** `experiment_id`, `bearing_id`, `damage_type`, `operating_condition`, `window_id`, `timestamp_sec`, `split` (`train` / `test`).
-- **Vibration Columns:** `vib_rms`, `vib_kurtosis`, `vib_spectral_energy`, etc., plus canonical un-prefixed aliases (`rms`, `kurtosis`, etc.) for direct CWRU model testing.
+- **Vibration Columns:** `vib_rms`, `vib_kurtosis`, `vib_spectral_energy`, etc., plus canonical un-prefixed aliases (`rms`, `kurtosis`, etc.).
 - **Motor Current Columns:** `current_1_rms`, `current_1_dominant_frequency_hz`, `current_2_rms`, `current_phase_unbalance`, etc.
-- **Grouping Rule:** Split strictly by physical `bearing_id`. Windows of test bearings (e.g. `KA01`) never leak into train.
 
 ### D. MIMII Processed Dataset: `data/processed/mimii_features.csv`
 - **Identifier Columns:** `machine_type`, `machine_id`, `snr_condition`, `condition` (`normal` / `anomaly`), `anomaly_label` (0 / 1), `recording_id`, `window_id`, `timestamp_sec`, `channel_id`, `split` (`train` / `test`).
 - **Acoustic Columns:** `audio_rms`, `audio_peak`, `audio_crest_factor`, `zero_crossing_rate`, `spectral_centroid_hz`, `spectral_bandwidth_hz`, `spectral_flatness`, `spectral_rolloff_hz`.
 - **Log-Mel Bands:** 16 filterbank features `mel_band_00` through `mel_band_15`.
-- **Splitting Modalities:**
-  - `split_mimii_by_recording()`: Unsupervised anomaly detection. Train contains ONLY normal recordings (70%); Test contains held-out normal (30%) + anomaly recordings (100%). Zero recording overlap!
-  - `split_mimii_by_machine()`: Cross-machine domain generalization. Train on `id_00`, test on `id_02`.
 
 ---
 
@@ -132,11 +171,16 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error
 
-df = pd.read_csv("data/processed/xjtu_sy_features.csv")
-features = ["rms", "kurtosis", "crest_factor", "dominant_frequency_hz", "spectral_energy"]
+df = pd.read_csv("data/processed/nasa_ims_features.csv")
+features = [
+    "rms", "mean", "std", "peak", "peak_to_peak", "skewness",
+    "kurtosis", "crest_factor", "dominant_frequency_hz",
+    "spectral_centroid_hz", "spectral_bandwidth_hz", "spectral_energy"
+]
 
-train_df = df[df["split"] == "train"]
-test_df = df[df["split"] == "test"]
+# Split early degradation vs late degradation or train across bearings
+split_idx = int(len(df) * 0.70)
+train_df, test_df = df.iloc[:split_idx], df.iloc[split_idx:]
 
 model = RandomForestRegressor(n_estimators=100, random_state=42)
 model.fit(train_df[features], train_df["rul_hours"])
@@ -165,38 +209,17 @@ preds = clf.predict(test_df[multimodal_features])
 print(classification_report(test_df["damage_type"], preds))
 ```
 
-### C. Unsupervised Acoustic Anomaly Detection (MIMII)
-```python
-import pandas as pd
-from sklearn.ensemble import IsolationForest
-from sklearn.metrics import roc_auc_score
-
-df = pd.read_csv("data/processed/mimii_features.csv")
-mel_features = [f"mel_band_{i:02d}" for i in range(16)] + ["spectral_flatness", "audio_rms"]
-
-train_df = df[df["split"] == "train"]  # Normal sound only
-test_df = df[df["split"] == "test"]    # Normal + Anomaly
-
-# Fit Isolation Forest on normal baseline operating sound
-detector = IsolationForest(contamination=0.1, random_state=42)
-detector.fit(train_df[mel_features])
-
-# Score anomaly
-scores = -detector.decision_function(test_df[mel_features])
-print("Acoustic Anomaly ROC-AUC:", roc_auc_score(test_df["anomaly_label"], scores))
-```
-
 ---
 
-## 7. Real Data Ingestion Guide
+## 7. Real Data Ingestion & Execution Guide
 
-When real raw datasets are acquired, place them into:
-- NASA IMS: `data/raw/NASA_IMS/<Set_folder>/` (timestamp files `YYYY.MM.DD.HH.MM.SS`).
+When real raw datasets are acquired, extract them into:
+- NASA IMS: `data/raw/NASA_IMS/<Set_folder>/` (e.g. `data/raw/NASA_IMS/2nd_test/`).
 - XJTU-SY: `data/raw/XJTU_SY/<Bearing_folder>/` (`1.csv`, `2.csv`, ...).
 - Paderborn: `data/raw/Paderborn/` (`*.mat` files with 64 kHz vibration & currents).
 - MIMII: `data/raw/MIMII/<machine_type>/<machine_id>/<snr>/normal|anomaly/*.wav`.
 
-Executing the module processors directly:
+Executing real-data ingestion:
 ```python
 from data_pipeline import (
     process_ims_experiment,
@@ -205,13 +228,21 @@ from data_pipeline import (
     process_mimii_subset,
 )
 
-# Process Paderborn
-df_pb = process_paderborn_dataset("data/raw/Paderborn", test_bearings=["KA01"])
-df_pb.to_csv("data/processed/paderborn_features.csv", index=False)
+# Process NASA IMS Set 2 Bearing 1 (Outer Race Failure)
+df_ims = process_ims_experiment(
+    data_dir="data/raw/NASA_IMS/2nd_test",
+    target_bearing=1,
+    experiment_id="NASA_IMS_Set2_B1",
+)
+df_ims.to_csv("data/processed/nasa_ims_features.csv", index=False)
 
-# Process MIMII
-df_mi = process_mimii_subset("data/raw/MIMII/pump", split_strategy="recording")
-df_mi.to_csv("data/processed/mimii_features.csv", index=False)
+# Process NASA IMS Set 1 Bearing 3 X-Axis (Inner Race Defect)
+df_ims_set1 = process_ims_experiment(
+    data_dir="data/raw/NASA_IMS/1st_test",
+    target_bearing=3,
+    axis="x",
+    experiment_id="NASA_IMS_Set1_B3x",
+)
 ```
 
 ---
@@ -221,7 +252,7 @@ df_mi.to_csv("data/processed/mimii_features.csv", index=False)
 All data pipelines are covered by automated unit tests in `tests/`:
 - `tests/test_cwru_loader.py`: 6 tests (CWRU key selection, 98 vs 99 fix, Fisher kurtosis).
 - `tests/test_rul_targets.py`: 5 tests (Linear RUL, Piecewise RUL, Health Index [1.0 -> 0.0]).
-- `tests/test_nasa_ims.py`: 3 tests (NASA IMS timestamps, 20 kHz windowing, RUL generation).
+- `tests/test_nasa_ims.py`: 10 tests (4-channel & 8-channel layouts, chronological sorting, corrupt snapshot handling, skipped-file reporting).
 - `tests/test_xjtu_sy.py`: 3 tests (XJTU-SY 2-axis CSV loading, experiment isolation).
 - `tests/test_paderborn.py`: 5 tests (64 kHz multi-channel ingestion, MCSA features, bearing leakage checks).
 - `tests/test_mimii.py`: 5 tests (16 kHz WAV loading, Log-Mel filterbanks, acoustic stats, unsupervised split).
@@ -230,4 +261,4 @@ Execute the full suite:
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests/test_cwru_loader.py tests/test_rul_targets.py tests/test_nasa_ims.py tests/test_xjtu_sy.py tests/test_paderborn.py tests/test_mimii.py -v
 ```
-**Total:** 27 unit tests, 100% passing.
+**Total:** 34 unit tests, 100% passing.
