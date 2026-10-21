@@ -19,6 +19,7 @@ import pandas as pd
 
 from .features import extract_vibration_features, FEATURE_COLUMNS
 from .rul_targets import compute_linear_rul, compute_piecewise_rul, compute_health_index
+from .splits import split_experiments_by_bearing, verify_no_experiment_leakage
 
 
 SAMPLING_RATE_XJTU = 25600.0  # 25.6 kHz
@@ -55,6 +56,12 @@ def load_xjtu_snapshot_file(file_path: Union[str, Path]) -> Tuple[np.ndarray, np
 
     horiz = df.iloc[:, 0].to_numpy(dtype=float)
     vert = df.iloc[:, 1].to_numpy(dtype=float)
+
+    if np.isnan(horiz).any() or np.isinf(horiz).any():
+        horiz = np.nan_to_num(horiz, nan=0.0, posinf=0.0, neginf=0.0)
+    if np.isnan(vert).any() or np.isinf(vert).any():
+        vert = np.nan_to_num(vert, nan=0.0, posinf=0.0, neginf=0.0)
+
     return horiz, vert
 
 
@@ -104,7 +111,7 @@ def process_xjtu_snapshot(
 def process_xjtu_bearing_experiment(
     bearing_dir: Union[str, Path],
     bearing_id: Optional[str] = None,
-    operating_condition: str = "Condition_1",
+    operating_condition: Optional[str] = None,
     max_rul_hours: Optional[float] = 2.0,
     healthy_fraction: float = 0.60,
     max_snapshots: Optional[int] = None,
@@ -114,7 +121,8 @@ def process_xjtu_bearing_experiment(
     Args:
         bearing_dir: Directory containing sequential snapshot CSVs (1.csv, 2.csv, ...).
         bearing_id: Unique bearing identifier (e.g. 'Bearing1_1'). If None, inferred from folder name.
-        operating_condition: Operating condition tag.
+        operating_condition: Operating condition tag. If None or 'Condition_1', inferred from parent
+                             directory name when matching condition conventions (e.g. '35Hz12kN').
         max_rul_hours: Capped maximum RUL for piecewise linear target (in hours).
         healthy_fraction: Proportion of experiment duration considered healthy.
         max_snapshots: Optional limit on snapshots to process.
@@ -128,6 +136,15 @@ def process_xjtu_bearing_experiment(
         raise FileNotFoundError(f"XJTU-SY bearing directory not found: {path}")
 
     b_id = bearing_id or path.name
+
+    # Resolve operating condition: if not specified or placeholder, inspect parent directory
+    op_cond = operating_condition
+    if op_cond is None or op_cond == "Condition_1":
+        parent_name = path.parent.name
+        if re.search(r"\d+(\.\d+)?Hz\d+kN", parent_name, re.IGNORECASE):
+            op_cond = parent_name
+        elif op_cond is None:
+            op_cond = "Condition_1"
 
     # Discover and sort snapshot CSVs numerically by index
     csv_files = []
@@ -172,7 +189,7 @@ def process_xjtu_bearing_experiment(
         for w_dict in windows:
             row = {
                 "experiment_id": "XJTU_SY",
-                "operating_condition": operating_condition,
+                "operating_condition": op_cond,
                 "bearing_id": b_id,
                 "snapshot_id": snap_idx,
                 "elapsed_minutes": round(el_min, 2),
@@ -189,6 +206,92 @@ def process_xjtu_bearing_experiment(
 
     df = pd.DataFrame(rows)
     return df
+
+
+def process_xjtu_dataset(
+    dataset_root: Union[str, Path],
+    bearing_subsets: Optional[List[str]] = None,
+    test_bearings: Optional[List[str]] = None,
+    test_size: float = 0.33,
+    max_snapshots_per_bearing: Optional[int] = None,
+    random_state: int = 42,
+) -> pd.DataFrame:
+    """Batch process XJTU-SY bearing dataset directories with leakage-free group splitting.
+
+    Discovers bearing folders across operating conditions (e.g. 35Hz12kN, 37.5Hz11kN, 40Hz10kN)
+    or directly within a specified directory. Guarantees that all snapshots for each bearing_id
+    reside strictly in either the train or test partition.
+
+    Args:
+        dataset_root: Path to XJTU-SY dataset root or operating condition directory.
+        bearing_subsets: Optional list of bearing names to include (e.g. ['Bearing1_1', 'Bearing2_1']).
+        test_bearings: Optional explicit list of bearing IDs for test partition.
+        test_size: Proportion of bearings assigned to test partition if test_bearings is None.
+        max_snapshots_per_bearing: Optional limit on snapshots per bearing (useful for quick evaluation).
+        random_state: Seed for reproducible group splitting.
+
+    Returns:
+        DataFrame containing window features, metadata, RUL targets, and 'split' column.
+    """
+    path = Path(dataset_root)
+    if not path.is_dir():
+        raise FileNotFoundError(f"XJTU-SY dataset directory not found: {path}")
+
+    # Discover bearing directories:
+    # 1. Root containing condition folders: <root>/<condition>/<bearing>/*.csv
+    # 2. Condition folder directly: <root>/<bearing>/*.csv
+    # 3. Bearing folder directly: <root>/*.csv
+    bearing_dirs: List[Tuple[Optional[str], Path]] = []
+
+    direct_csvs = list(path.glob("*.csv"))
+    if direct_csvs:
+        bearing_dirs.append((None, path))
+    else:
+        for sub in sorted(path.iterdir()):
+            if not sub.is_dir():
+                continue
+            sub_csvs = list(sub.glob("*.csv"))
+            if sub_csvs:
+                bearing_dirs.append((path.name, sub))
+            else:
+                for b_sub in sorted(sub.iterdir()):
+                    if b_sub.is_dir() and list(b_sub.glob("*.csv")):
+                        bearing_dirs.append((sub.name, b_sub))
+
+    if not bearing_dirs:
+        raise ValueError(f"No valid XJTU-SY bearing directories with CSV snapshots found in {path}")
+
+    if bearing_subsets is not None:
+        subset_set = set(bearing_subsets)
+        bearing_dirs = [bd for bd in bearing_dirs if bd[1].name in subset_set]
+        if not bearing_dirs:
+            raise ValueError(f"None of the requested bearing_subsets {bearing_subsets} found in {path}")
+
+    dfs = []
+    for cond_name, b_dir in bearing_dirs:
+        df_b = process_xjtu_bearing_experiment(
+            bearing_dir=b_dir,
+            bearing_id=b_dir.name,
+            operating_condition=cond_name,
+            max_snapshots=max_snapshots_per_bearing,
+        )
+        dfs.append(df_b)
+
+    full_df = pd.concat(dfs, ignore_index=True)
+
+    unique_bearings = full_df["bearing_id"].unique().tolist()
+    if len(unique_bearings) >= 2:
+        train_df, test_df = split_experiments_by_bearing(
+            full_df,
+            group_col="bearing_id",
+            test_groups=test_bearings,
+            test_size=test_size,
+            random_state=random_state,
+        )
+        return pd.concat([train_df, test_df], ignore_index=True)
+    else:
+        full_df["split"] = "train"
+        return full_df
 
 
 def generate_synthetic_xjtu_experiment(

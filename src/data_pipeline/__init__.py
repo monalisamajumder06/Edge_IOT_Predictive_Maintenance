@@ -26,6 +26,7 @@ from .nasa_ims import (
 )
 from .xjtu_sy import (
     process_xjtu_bearing_experiment,
+    process_xjtu_dataset,
     load_xjtu_snapshot_file,
     generate_synthetic_xjtu_experiment,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "generate_synthetic_ims_experiment",
     "resolve_ims_channel",
     "process_xjtu_bearing_experiment",
+    "process_xjtu_dataset",
     "load_xjtu_snapshot_file",
     "generate_synthetic_xjtu_experiment",
     "split_experiments_by_bearing",

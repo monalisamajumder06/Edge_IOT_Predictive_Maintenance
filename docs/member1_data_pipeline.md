@@ -215,7 +215,7 @@ print(classification_report(test_df["damage_type"], preds))
 
 When real raw datasets are acquired, extract them into:
 - NASA IMS: `data/raw/NASA_IMS/<Set_folder>/` (e.g. `data/raw/NASA_IMS/2nd_test/`).
-- XJTU-SY: `data/raw/XJTU_SY/<Bearing_folder>/` (`1.csv`, `2.csv`, ...).
+- XJTU-SY: `data/raw/XJTU_SY/XJTU-SY_Bearing_Datasets/<Condition_folder>/<Bearing_folder>/` (`35Hz12kN/Bearing1_1/1.csv`, `37.5Hz11kN/Bearing2_1/1.csv`, `40Hz10kN/Bearing3_1/1.csv`, etc.).
 - Paderborn: `data/raw/Paderborn/` (`*.mat` files with 64 kHz vibration & currents).
 - MIMII: `data/raw/MIMII/<machine_type>/<machine_id>/<snr>/normal|anomaly/*.wav`.
 
@@ -224,6 +224,7 @@ Executing real-data ingestion:
 from data_pipeline import (
     process_ims_experiment,
     process_xjtu_bearing_experiment,
+    process_xjtu_dataset,
     process_paderborn_dataset,
     process_mimii_subset,
 )
@@ -243,6 +244,18 @@ df_ims_set1 = process_ims_experiment(
     axis="x",
     experiment_id="NASA_IMS_Set1_B3x",
 )
+
+# Process individual XJTU-SY Bearing experiment (with auto-inferred operating condition)
+df_xjtu_b1 = process_xjtu_bearing_experiment(
+    bearing_dir="data/raw/XJTU_SY/XJTU-SY_Bearing_Datasets/35Hz12kN/Bearing1_1",
+)
+
+# Batch process full XJTU-SY dataset with leakage-free train/test partition
+df_xjtu = process_xjtu_dataset(
+    dataset_root="data/raw/XJTU_SY/XJTU-SY_Bearing_Datasets",
+    test_bearings=["Bearing1_5", "Bearing2_5", "Bearing3_5"],
+)
+df_xjtu.to_csv("data/processed/xjtu_sy_features.csv", index=False)
 ```
 
 ---
@@ -253,7 +266,7 @@ All data pipelines are covered by automated unit tests in `tests/`:
 - `tests/test_cwru_loader.py`: 6 tests (CWRU key selection, 98 vs 99 fix, Fisher kurtosis).
 - `tests/test_rul_targets.py`: 5 tests (Linear RUL, Piecewise RUL, Health Index [1.0 -> 0.0]).
 - `tests/test_nasa_ims.py`: 10 tests (4-channel & 8-channel layouts, chronological sorting, corrupt snapshot handling, skipped-file reporting).
-- `tests/test_xjtu_sy.py`: 3 tests (XJTU-SY 2-axis CSV loading, experiment isolation).
+- `tests/test_xjtu_sy.py`: 6 tests (XJTU-SY 2-axis CSV loading, experiment isolation, condition auto-inference, batch dataset processing, real data validation).
 - `tests/test_paderborn.py`: 5 tests (64 kHz multi-channel ingestion, MCSA features, bearing leakage checks).
 - `tests/test_mimii.py`: 5 tests (16 kHz WAV loading, Log-Mel filterbanks, acoustic stats, unsupervised split).
 
@@ -261,4 +274,4 @@ Execute the full suite:
 ```powershell
 .\.venv\Scripts\python.exe -m unittest tests/test_cwru_loader.py tests/test_rul_targets.py tests/test_nasa_ims.py tests/test_xjtu_sy.py tests/test_paderborn.py tests/test_mimii.py -v
 ```
-**Total:** 34 unit tests, 100% passing.
+**Total:** 44 unit tests, 100% passing.
